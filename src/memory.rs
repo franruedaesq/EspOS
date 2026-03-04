@@ -55,9 +55,11 @@ pub fn init_heap() {
 
 /// Initialise the PSRAM heap region (8 MiB of external SPI-PSRAM).
 ///
-/// The `esp_alloc::psram_allocator!` macro configures the PSRAM controller
-/// and adds the external memory window to the existing global allocator so
-/// that large allocations automatically use PSRAM.
+/// This macro wraps [`esp_alloc::psram_allocator!`] to provide a consistent
+/// `memory::` namespace and keep the PSRAM boot sequence co-located with the
+/// SRAM initialisation above.  It configures the PSRAM controller via
+/// `esp_hal::psram` and adds the external memory window to the existing global
+/// allocator so that large allocations automatically use PSRAM.
 ///
 /// Call this **after** [`init_heap`] and after the PSRAM peripheral has been
 /// enabled via `esp_hal::psram`.
@@ -65,7 +67,7 @@ pub fn init_heap() {
 /// # Example
 /// ```rust,no_run
 /// memory::init_heap();
-/// memory::init_psram(peripherals.PSRAM);
+/// memory::init_psram!(peripherals.PSRAM);
 /// ```
 #[macro_export]
 macro_rules! init_psram {

@@ -154,7 +154,8 @@ use embedded_graphics::pixelcolor::raw::RawU16;
 fn compose(fb: &mut Framebuffer, cmd: &UiDrawCommand) {
     match cmd {
         UiDrawCommand::Clear(color) => {
-            fb.clear(*color).ok();
+            // `DrawTarget::clear` returns `Infallible` – unwrap is always safe.
+            fb.clear(*color).unwrap();
         }
 
         UiDrawCommand::StatusText(text) => {

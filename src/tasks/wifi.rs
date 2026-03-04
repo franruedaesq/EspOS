@@ -82,14 +82,14 @@ pub async fn wifi_task(
     let ssid = match heapless::String::from_str(SSID) {
         Ok(s) => s,
         Err(_) => {
-            log::error!("[wifi] SSID too long (max 32 chars) – task halted");
+            log::error!("[wifi] SSID '{}' too long (max 32 chars) – task halted", SSID);
             return;
         }
     };
     let password = match heapless::String::from_str(PASSWORD) {
         Ok(p) => p,
         Err(_) => {
-            log::error!("[wifi] PASSWORD too long (max 64 chars) – task halted");
+            log::error!("[wifi] PASSWORD too long ({} chars, max 64) – task halted", PASSWORD.len());
             return;
         }
     };

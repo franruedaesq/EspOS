@@ -39,7 +39,7 @@ const WHO_AM_I_RESPONSE: u8 = 0x70;
 /// Accelerometer scale factor for ±2 g range: 16384 LSB/g.
 const ACCEL_SCALE: f32 = 16384.0;
 /// Gravity constant in m/s².
-const G: f32 = 9.80665;
+const GRAVITY_MS2: f32 = 9.80665;
 /// Gyroscope scale factor for ±250 °/s range: 131 LSB/(°/s).
 const GYRO_SCALE_DEG: f32 = 131.0;
 /// Convert degrees per second to radians per second.
@@ -131,9 +131,9 @@ impl<'d> Mpu6500<'d> {
     pub fn read_accel(&mut self) -> Result<Vector3D, Mpu6500Error> {
         let mut raw = [0u8; 6];
         self.read_bytes(REG_ACCEL_XOUT_H, &mut raw)?;
-        let ax = i16::from_be_bytes([raw[0], raw[1]]) as f32 / ACCEL_SCALE * G;
-        let ay = i16::from_be_bytes([raw[2], raw[3]]) as f32 / ACCEL_SCALE * G;
-        let az = i16::from_be_bytes([raw[4], raw[5]]) as f32 / ACCEL_SCALE * G;
+        let ax = i16::from_be_bytes([raw[0], raw[1]]) as f32 / ACCEL_SCALE * GRAVITY_MS2;
+        let ay = i16::from_be_bytes([raw[2], raw[3]]) as f32 / ACCEL_SCALE * GRAVITY_MS2;
+        let az = i16::from_be_bytes([raw[4], raw[5]]) as f32 / ACCEL_SCALE * GRAVITY_MS2;
         Ok(Vector3D::new(ax, ay, az))
     }
 

@@ -99,12 +99,13 @@ impl<'d> Vl53l0x<'d> {
         self.write_byte(0x88, 0x00)?;
         self.write_byte(0x80, 0x01)?;
         self.write_byte(0xFF, 0x01)?;
-        // The following two writes to register 0x00 are required by the
-        // ST undocumented calibration sequence: first clear the register to
-        // deselect the private page, then assert bit 0 to latch the
-        // calibration result before restoring normal register access.
-        self.write_byte(0x00, 0x00)?;
-        self.write_byte(0x00, 0x01)?;
+        // ST undocumented calibration sequence (reg 0x00):
+        //   First  write (0x00): deselect private page (clear the mux bit).
+        //   Second write (0x01): latch calibration result (assert bit 0).
+        // After these two writes reg 0xFF is restored to page 0 and the
+        // normal register map becomes accessible again.
+        self.write_byte(0x00, 0x00)?; // deselect private page
+        self.write_byte(0x00, 0x01)?; // latch calibration
         self.write_byte(0xFF, 0x00)?;
         self.write_byte(0x80, 0x00)?;
 

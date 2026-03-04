@@ -30,7 +30,7 @@ impl Vector3D {
 
     /// Return the normalised unit vector, or `(0, 0, 0)` if the magnitude is
     /// below the given `epsilon`.
-    pub fn normalise(&self, epsilon: f32) -> Self {
+    pub fn normalize(&self, epsilon: f32) -> Self {
         let mag = self.magnitude();
         if mag > epsilon {
             Self::new(self.x / mag, self.y / mag, self.z / mag)

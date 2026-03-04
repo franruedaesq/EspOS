@@ -7,6 +7,9 @@ license = "MIT"
 
 [dependencies]
 # Hardware Abstraction Layer for ESP32-S3
+# The "unstable" feature is required for direct register access used by the
+# TWAI (CAN), I2S, and PSRAM peripheral drivers.  Track stabilisation at
+# https://github.com/esp-rs/esp-hal/issues.
 esp-hal = { version = "0.22", features = ["esp32s3", "unstable"] }
 
 # Embassy integration layer for esp-hal (timer drivers, executor init)

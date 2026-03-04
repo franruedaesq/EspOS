@@ -105,11 +105,13 @@ impl St7789Driver {
 
     fn hard_reset(&mut self) {
         self.rst.set_low();
-        // ~10 ms reset pulse (blocking busy-wait – only done once at boot).
+        // ~10 ms reset pulse at ~80 MHz CPU (200 000 × ~5 ns ≈ 10 ms).
+        // Blocking busy-wait is acceptable here because this runs once at boot.
         for _ in 0..200_000u32 {
             core::hint::spin_loop();
         }
         self.rst.set_high();
+        // Allow ≥5 ms for the panel to exit reset before sending commands.
         for _ in 0..200_000u32 {
             core::hint::spin_loop();
         }
