@@ -7,7 +7,7 @@
 //! ## Core assignment
 //! | Core | Tasks                                    |
 //! |------|------------------------------------------|
-//! | 0    | heartbeat, WiFi, state machine           |
+//! | 0    | heartbeat, WiFi, state machine, telemetry, CLI |
 //! | 1    | IMU sensor fusion, motor PWM             |
 //!
 //! ## Boot sequence
@@ -15,8 +15,9 @@
 //! 2. [`memory::init_heap`] – register 512 KB SRAM with the global allocator.
 //! 3. [`memory::init_psram!`] – register 8 MB PSRAM with the global allocator.
 //! 4. Embassy timer init (`esp_hal_embassy::init`).
-//! 5. Spawn all async tasks.
-//! 6. Enter [`state_machine::run`] – never returns.
+//! 5. Hardware watchdog enable (TIMG1 MWDT, 10-second timeout).
+//! 6. Spawn all async tasks.
+//! 7. Enter [`state_machine::run`] – never returns.
 
 #![no_std]
 #![no_main]
@@ -29,7 +30,7 @@ use esp_backtrace as _;
 use embassy_executor::Spawner;
 use esp_hal::{
     gpio::{Level, Output},
-    timer::timg::TimerGroup,
+    timer::timg::{MwdtStage, TimerGroup},
 };
 use log::info;
 
@@ -77,7 +78,26 @@ async fn main(spawner: Spawner) {
     esp_hal_embassy::init(timg0.timer0);
 
     // -------------------------------------------------------------------------
-    // 5. Peripheral setup
+    // 5. Hardware Watchdog Timer (TIMG1 MWDT, 10-second timeout)
+    //
+    //    If the firmware ever freezes or enters an infinite non-yielding loop
+    //    the MWDT will forcefully reboot the ESP32-S3 after 10 seconds.
+    //    The heartbeat_task feeds the watchdog every ~1 second during normal
+    //    operation, so the timeout is never reached when the system is healthy.
+    // -------------------------------------------------------------------------
+    let timg1 = TimerGroup::new(peripherals.TIMG1);
+    let mut wdt1 = timg1.wdt;
+    // Stage 0: reset the chip after 10 seconds without a feed.
+    const WDT_TIMEOUT_US: u64 = 10_000_000; // 10 seconds in microseconds
+    wdt1.set_timeout(
+        MwdtStage::Stage0,
+        fugit::MicrosDurationU64::from_ticks(WDT_TIMEOUT_US),
+    );
+    wdt1.enable();
+    info!("EspOS: hardware watchdog enabled (10 s timeout)");
+
+    // -------------------------------------------------------------------------
+    // 6. Peripheral setup
     // -------------------------------------------------------------------------
 
     // -- Heartbeat LED --------------------------------------------------------
@@ -108,12 +128,12 @@ async fn main(spawner: Spawner) {
     // let cs  = Output::new(peripherals.GPIO10, Level::High);
 
     // -------------------------------------------------------------------------
-    // 6. Spawn tasks – Core 0
+    // 7. Spawn tasks – Core 0
     // -------------------------------------------------------------------------
 
-    // Heartbeat: 1 Hz LED blink to show the system is alive.
+    // Heartbeat: 1 Hz LED blink, hardware WDT feed, and CPU-load counter.
     spawner
-        .spawn(tasks::heartbeat::heartbeat_task(led))
+        .spawn(tasks::heartbeat::heartbeat_task(led, wdt1))
         .expect("spawn heartbeat_task");
 
     // WiFi + embassy-net tasks.
@@ -133,8 +153,20 @@ async fn main(spawner: Spawner) {
     // spawner.spawn(tasks::wifi::net_task(runner)).expect("spawn net_task");
     // spawner.spawn(tasks::wifi::wifi_task(wifi_controller, stack)).expect("spawn wifi_task");
 
+    // Telemetry: sample RAM, CPU load, and battery voltage every 1 second.
+    spawner
+        .spawn(tasks::telemetry::telemetry_task())
+        .expect("spawn telemetry_task");
+
+    // Debug CLI: process serial commands from the CLI_COMMAND_CHANNEL.
+    // Wire a UART reader task (or an ISR) to push bytes via
+    // `tasks::cli::push_byte(byte)` to feed the channel.
+    spawner
+        .spawn(tasks::cli::cli_task())
+        .expect("spawn cli_task");
+
     // -------------------------------------------------------------------------
-    // 7. Spawn tasks – Core 1
+    // 8. Spawn tasks – Core 1
     // -------------------------------------------------------------------------
 
     // IMU sensor fusion at 100 Hz.
@@ -148,7 +180,7 @@ async fn main(spawner: Spawner) {
         .expect("spawn motor_task");
 
     // -------------------------------------------------------------------------
-    // 8. Spawn tasks – any core
+    // 9. Spawn tasks – any core
     // -------------------------------------------------------------------------
 
     // CAN bus / TWAI message router.
@@ -162,7 +194,7 @@ async fn main(spawner: Spawner) {
         .expect("spawn ui_task");
 
     // -------------------------------------------------------------------------
-    // 9. Agentic state machine (runs on this task, Core 0)
+    // 10. Agentic state machine (runs on this task, Core 0)
     // -------------------------------------------------------------------------
     info!("EspOS: all tasks spawned – entering state machine");
     state_machine::run(&spawner).await;

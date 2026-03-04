@@ -78,3 +78,17 @@ macro_rules! init_psram {
 
 /// Convenience re-export so callers can write `memory::init_psram!(...)`.
 pub use init_psram;
+
+// ---------------------------------------------------------------------------
+// Runtime heap statistics
+// ---------------------------------------------------------------------------
+
+/// Returns the number of bytes currently allocated from the SRAM heap.
+pub fn heap_used() -> usize {
+    ALLOCATOR.used()
+}
+
+/// Returns the number of bytes not yet allocated in the SRAM heap.
+pub fn heap_free() -> usize {
+    ALLOCATOR.free()
+}

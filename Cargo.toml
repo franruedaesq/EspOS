@@ -62,6 +62,9 @@ critical-section = "1.2"
 # Future combinators (select!, join!)
 embassy-futures = "0.1"
 
+# Time types used for the hardware watchdog timeout
+fugit = "0.3"
+
 [profile.release]
 # Optimise for size on constrained flash
 opt-level = "s"
