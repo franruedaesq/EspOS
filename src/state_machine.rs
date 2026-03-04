@@ -278,6 +278,7 @@ async fn parse_and_dispatch_motion(cmd: &str) {
 /// Apply emergency braking and update the UI.
 async fn handle_emergency_stop() {
     MOTOR_CHANNEL.send(MotorCommand::Brake).await;
+    use embedded_graphics::prelude::RgbColor;
     push_ui(UiDrawCommand::Clear(embedded_graphics::pixelcolor::Rgb565::RED)).await;
     push_ui(UiDrawCommand::StatusText(
         heapless::String::try_from("EMERGENCY STOP").unwrap_or_default(),

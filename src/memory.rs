@@ -2,55 +2,25 @@
 //!
 //! This module configures two heap regions:
 //!
-//! * **SRAM heap** – 512 KB of on-chip RAM used for execution stacks, atomic
+//! * **SRAM heap** – 128 KB of on-chip RAM used for execution stacks, atomic
 //!   data structures, and small allocations that must be DMA-accessible.
 //! * **PSRAM heap** – 8 MB of external SPI-PSRAM used for large buffers such
 //!   as the graphics framebuffer and audio ring buffers.
 //!
-//! Both regions are exposed through a single [`esp_alloc::EspHeap`] global
-//! allocator, which is fully `no_std` compatible.
+//! Both regions are exposed through `esp_alloc`, which declares a
+//! `#[global_allocator]` internally.
 
-use core::mem::MaybeUninit;
+/// Size of the SRAM heap region: 128 KiB.
+/// The dram_seg is ~338 KiB total; leave room for stacks, .bss, and .data.
+/// Use PSRAM for larger allocations once enabled.
+pub const SRAM_HEAP_SIZE: usize = 128 * 1024;
 
-// ---------------------------------------------------------------------------
-// Global allocator
-// ---------------------------------------------------------------------------
-
-/// The single global allocator for the entire firmware.
-///
-/// `EspHeap` supports multiple disjoint memory regions and is safe to use from
-/// multiple cores simultaneously (uses a critical section internally).
-#[global_allocator]
-static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
-
-// ---------------------------------------------------------------------------
-// SRAM heap
-// ---------------------------------------------------------------------------
-
-/// Size of the SRAM heap region: 512 KiB.
-pub const SRAM_HEAP_SIZE: usize = 512 * 1024;
-
-/// Static backing store for the SRAM heap.
-///
-/// Placed in the default `.bss` / `.data` region, which maps to internal SRAM.
-static mut SRAM_HEAP: MaybeUninit<[u8; SRAM_HEAP_SIZE]> = MaybeUninit::uninit();
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/// Initialise the SRAM heap region.
+/// Initialise the SRAM heap region using the esp_alloc macro.
 ///
 /// Must be called **once**, early in `main`, before any heap allocation is
-/// attempted.  Calling it more than once is safe but wastes memory.
-///
-/// # Safety
-/// This function writes to the `SRAM_HEAP` static.  It is safe to call once
-/// from a single-threaded context during boot.
+/// attempted.
 pub fn init_heap() {
-    unsafe {
-        ALLOCATOR.init(SRAM_HEAP.as_mut_ptr() as *mut u8, SRAM_HEAP_SIZE);
-    }
+    esp_alloc::heap_allocator!(SRAM_HEAP_SIZE);
 }
 
 /// Initialise the PSRAM heap region (8 MiB of external SPI-PSRAM).

@@ -10,25 +10,25 @@ license = "MIT"
 # The "unstable" feature is required for direct register access used by the
 # TWAI (CAN), I2S, and PSRAM peripheral drivers.  Track stabilisation at
 # https://github.com/esp-rs/esp-hal/issues.
-esp-hal = { version = "0.22", features = ["esp32s3", "unstable"] }
+esp-hal = { version = "0.23", features = ["esp32s3"] }
 
 # Embassy integration layer for esp-hal (timer drivers, executor init)
-esp-hal-embassy = { version = "0.5", features = ["esp32s3"] }
+esp-hal-embassy = { version = "0.6", features = ["esp32s3"] }
 
 # Async executor with sufficient task arena for all spawned tasks
-embassy-executor = { version = "0.6", features = ["task-arena-size-20480"] }
+embassy-executor = { version = "0.7", features = ["task-arena-size-20480"] }
 
 # Async timers and time-keeping
-embassy-time = "0.3"
+embassy-time = "0.4"
 
 # Async channels and mutexes for inter-task communication
 embassy-sync = "0.6"
 
 # TCP/UDP/DHCP network stack
-embassy-net = { version = "0.4", features = ["tcp", "udp", "dhcpv4", "medium-ethernet"] }
+embassy-net = { version = "0.6", features = ["tcp", "udp", "dhcpv4", "medium-ethernet"] }
 
 # Panic handler and backtrace for ESP32-S3
-esp-backtrace = { version = "0.14", features = [
+esp-backtrace = { version = "0.15", features = [
     "esp32s3",
     "exception-handler",
     "panic-handler",
@@ -36,13 +36,13 @@ esp-backtrace = { version = "0.14", features = [
 ] }
 
 # Logging over UART
-esp-println = { version = "0.12", features = ["esp32s3", "log"] }
+esp-println = { version = "0.13", features = ["esp32s3", "log"] }
 
 # Heap allocator supporting both SRAM and PSRAM regions
-esp-alloc = "0.5"
+esp-alloc = "0.6"
 
 # WiFi driver with Embassy async support
-esp-wifi = { version = "0.12", features = ["esp32s3", "wifi", "embassy-net"] }
+esp-wifi = { version = "0.12", features = ["esp32s3", "wifi"] }
 
 # 2-D graphics primitives for the virtual framebuffer
 embedded-graphics = "0.8"
@@ -65,14 +65,18 @@ embassy-futures = "0.1"
 # Time types used for the hardware watchdog timeout
 fugit = "0.3"
 
+# Software floating-point math (no_std)
+libm = "0.2"
+
 [profile.release]
-# Optimise for size on constrained flash
-opt-level = "s"
+opt-level = 2
 debug = false
-lto = "fat"
-codegen-units = 1
+lto = false
 
 [profile.dev]
-# Keep debug info while developing; still optimise enough to fit
-opt-level = "s"
+opt-level = 2
 debug = true
+
+# esp-wifi requires opt-level 2+, override if any profile uses less
+[profile.dev.package.esp-wifi]
+opt-level = 2

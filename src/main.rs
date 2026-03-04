@@ -127,6 +127,30 @@ async fn main(spawner: Spawner) {
     // let rst = Output::new(peripherals.GPIO3,  Level::High);
     // let cs  = Output::new(peripherals.GPIO10, Level::High);
 
+    // -- ST7789 SPI display (Wokwi Configuration) -----------------------------
+    use esp_hal::spi::master::{Config as SpiConfig, Spi};
+    use esp_hal::spi::Mode as SpiMode;
+    use esp_hal::time::RateExtU32;
+
+    let mosi = peripherals.GPIO11;
+    let sck  = peripherals.GPIO12;
+
+    let mut spi_config = SpiConfig::default();
+    spi_config.frequency = 40.MHz();
+    spi_config.mode = SpiMode::_0;
+
+    let spi = Spi::new(peripherals.SPI2, spi_config)
+        .unwrap()
+        .with_sck(sck)
+        .with_mosi(mosi);
+
+    let dc  = Output::new(peripherals.GPIO2,  Level::Low);
+    let rst = Output::new(peripherals.GPIO3,  Level::High);
+    let cs  = Output::new(peripherals.GPIO10, Level::High);
+
+    // If you want to test the UI logic immediately, you can initialize the driver here
+    // let mut display_driver = drivers::st7789::St7789Driver::new(dc, rst, cs);
+
     // -------------------------------------------------------------------------
     // 7. Spawn tasks – Core 0
     // -------------------------------------------------------------------------

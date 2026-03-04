@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "author": "EspOS Virtual Lab",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-s3-devkitc-1", "id": "esp", "top": 0, "left": 0 },
+    { "type": "wokwi-ili9341", "id": "tft", "top": -30, "left": 200 }
+  ],
+  "connections": [
+    ["esp:TX", "$serialMonitor:RX", ""],
+    ["esp:RX", "$serialMonitor:TX", ""],
+    ["esp:11", "tft:MOSI", "green"],
+    ["esp:12", "tft:SCK", "blue"],
+    ["esp:10", "tft:CS", "orange"],
+    ["esp:2", "tft:DC", "yellow"],
+    ["esp:3", "tft:RESET", "purple"],
+    ["tft:VCC", "esp:3V3", "red"],
+    ["tft:GND", "esp:GND", "black"],
+    ["tft:LED", "esp:3V3", "red"]
+  ]
+}

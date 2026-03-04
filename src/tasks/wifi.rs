@@ -27,10 +27,16 @@ use static_cell::StaticCell;
 // ---------------------------------------------------------------------------
 
 /// Target SSID – override via environment variable at build time.
-const SSID: &str = env!("WIFI_SSID");
+const SSID: &str = match option_env!("WIFI_SSID") {
+    Some(s) => s,
+    None => "default_ssid",
+};
 
 /// WPA2 passphrase – override via environment variable at build time.
-const PASSWORD: &str = env!("WIFI_PASSWORD");
+const PASSWORD: &str = match option_env!("WIFI_PASSWORD") {
+    Some(s) => s,
+    None => "default_password",
+};
 
 // ---------------------------------------------------------------------------
 // Static allocations required by embassy-net
@@ -127,11 +133,12 @@ pub async fn wifi_task(
                 let mut addr: heapless::String<16> = heapless::String::new();
                 let ip = config.address.address();
                 // Format the IPv4 address into the heapless string.
+                let octets = ip.octets();
                 let _ = core::fmt::write(
                     &mut addr,
                     format_args!("{}.{}.{}.{}",
-                        ip.as_bytes()[0], ip.as_bytes()[1],
-                        ip.as_bytes()[2], ip.as_bytes()[3]),
+                        octets[0], octets[1],
+                        octets[2], octets[3]),
                 );
                 log::info!("[wifi] IP: {}", addr.as_str());
                 // Best-effort send; receiver may not be waiting yet.
