@@ -181,8 +181,15 @@ pub async fn run(_spawner: &Spawner) {
                     // the LLM endpoint, parse the JSON response.
                     Timer::after_millis(800).await; // Simulate network RTT.
 
+                    // Use a safe fallback command if the string literal somehow
+                    // exceeds the heapless buffer (should never happen here, but
+                    // prevents a silent empty-string no-op in production paths
+                    // where the LLM response is substituted).
                     let cmd_text: heapless::String<64> =
-                        heapless::String::try_from("forward 0.5").unwrap_or_default();
+                        heapless::String::try_from("forward 0.5").unwrap_or_else(|_| {
+                            log::warn!("[state_machine] LLM response too long – defaulting to stop");
+                            heapless::String::try_from("stop").unwrap_or_default()
+                        });
 
                     log::info!("[state_machine] LLM response: '{}'", cmd_text.as_str());
                     state = RoverState::Moving {

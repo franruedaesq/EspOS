@@ -77,16 +77,37 @@ pub async fn wifi_task(
     log::info!("[wifi] task started");
 
     // ---- associate -------------------------------------------------------
+    // Validate credential lengths before constructing the configuration.
+    // SSID max = 32 chars, password max = 64 chars (WPA2 PSK limit).
+    let ssid = match heapless::String::from_str(SSID) {
+        Ok(s) => s,
+        Err(_) => {
+            log::error!("[wifi] SSID too long (max 32 chars) – task halted");
+            return;
+        }
+    };
+    let password = match heapless::String::from_str(PASSWORD) {
+        Ok(p) => p,
+        Err(_) => {
+            log::error!("[wifi] PASSWORD too long (max 64 chars) – task halted");
+            return;
+        }
+    };
     let client_cfg = ClientConfiguration {
-        ssid: heapless::String::from_str(SSID).unwrap(),
-        password: heapless::String::from_str(PASSWORD).unwrap(),
+        ssid,
+        password,
         ..Default::default()
     };
 
     let mut ctrl = controller;
-    ctrl.set_configuration(&Configuration::Client(client_cfg))
-        .unwrap();
-    ctrl.start_async().await.unwrap();
+    if let Err(e) = ctrl.set_configuration(&Configuration::Client(client_cfg)) {
+        log::error!("[wifi] failed to set client configuration: {:?}", e);
+        return;
+    }
+    if let Err(e) = ctrl.start_async().await {
+        log::error!("[wifi] failed to start WiFi controller: {:?}", e);
+        return;
+    }
     log::info!("[wifi] connecting to '{}'…", SSID);
 
     loop {
