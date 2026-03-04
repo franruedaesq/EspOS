@@ -55,10 +55,10 @@ pub use init_psram;
 
 /// Returns the number of bytes currently allocated from the SRAM heap.
 pub fn heap_used() -> usize {
-    ALLOCATOR.used()
+    esp_alloc::HEAP.used()
 }
 
 /// Returns the number of bytes not yet allocated in the SRAM heap.
 pub fn heap_free() -> usize {
-    ALLOCATOR.free()
+    esp_alloc::HEAP.free()
 }
