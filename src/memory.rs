@@ -47,7 +47,7 @@ macro_rules! init_psram {
 }
 
 /// Convenience re-export so callers can write `memory::init_psram!(...)`.
-pub use init_psram;
+
 
 // ---------------------------------------------------------------------------
 // Runtime heap statistics

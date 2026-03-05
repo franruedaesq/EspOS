@@ -14,11 +14,10 @@
 use core::str::FromStr;
 
 use embassy_executor::task;
-use embassy_net::{Config, Runner, Stack, StackResources};
+use embassy_net::{Runner, Stack, StackResources};
 use embassy_time::Timer;
 use esp_wifi::wifi::{
-    ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiStaDevice,
-    WifiState,
+    ClientConfiguration, Configuration, WifiController, WifiDevice, WifiStaDevice,
 };
 use static_cell::StaticCell;
 

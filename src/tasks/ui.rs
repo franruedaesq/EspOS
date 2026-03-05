@@ -31,6 +31,52 @@ use embedded_graphics::{
     text::Text,
 };
 
+/// Menu items for the interface
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MenuItem {
+    Talk,
+    State,
+    Settings,
+    Help,
+}
+
+impl MenuItem {
+    fn to_str(&self) -> &'static str {
+        match self {
+            MenuItem::Talk => "Talk",
+            MenuItem::State => "State",
+            MenuItem::Settings => "Settings",
+            MenuItem::Help => "Help",
+        }
+    }
+
+    fn index(&self) -> usize {
+        match self {
+            MenuItem::Talk => 0,
+            MenuItem::State => 1,
+            MenuItem::Settings => 2,
+            MenuItem::Help => 3,
+        }
+    }
+
+    fn from_index(idx: usize) -> Self {
+        match idx % 4 {
+            0 => MenuItem::Talk,
+            1 => MenuItem::State,
+            2 => MenuItem::Settings,
+            _ => MenuItem::Help,
+        }
+    }
+
+    fn next(&self) -> Self {
+        Self::from_index(self.index() + 1)
+    }
+
+    fn prev(&self) -> Self {
+        Self::from_index(self.index().saturating_sub(1) + 4)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Display constants
 // ---------------------------------------------------------------------------
@@ -79,23 +125,52 @@ pub const UI_CHANNEL_DEPTH: usize = 8;
 pub static UI_DRAW_CHANNEL: Channel<CriticalSectionRawMutex, UiDrawCommand, UI_CHANNEL_DEPTH> =
     Channel::new();
 
+/// Events sent from the UI task back to the state machine.
+#[derive(Debug, Clone)]
+pub enum UiEvent {
+    /// User selected a menu item.
+    MenuItemSelected(MenuItem),
+    /// Menu was opened.
+    MenuOpened,
+    /// Menu was closed (timeout or after selection).
+    MenuClosed,
+}
+
+/// Channel through which the UI task sends events to the state machine.
+/// Increased to 16 to prevent overflow during long state machine operations.
+pub static UI_EVENT_CHANNEL: Channel<CriticalSectionRawMutex, UiEvent, 16> = Channel::new();
+
 // Note: Framebuffer implementation removed for Wokwi - we draw directly to display
 
 // ---------------------------------------------------------------------------
 // Compose helper
 // ---------------------------------------------------------------------------
 
-fn render_scene<D>(display: &mut D, mood: FaceMood, frame: u32, eye_dx: i32, eye_dy: i32)
+fn render_scene<D>(
+    display: &mut D,
+    mood: FaceMood,
+    frame: u32,
+    eye_dx: i32,
+    eye_dy: i32,
+    menu_open: bool,
+    selected_item: MenuItem,
+)
 where
     D: DrawTarget<Color = BinaryColor, Error = core::convert::Infallible>,
 {
     let _ = display.clear(BinaryColor::Off);
     let fill = PrimitiveStyle::with_fill(BinaryColor::On);
     let stroke = PrimitiveStyle::with_stroke(BinaryColor::On, 1);
+    let small_font = MonoTextStyle::new(&FONT_5X8, BinaryColor::On);
 
-    // Face centered, minimal "screen bot" style
-    let face_cx = 64;
-    let face_cy = 30;
+    // Determine layout based on menu state
+    let (face_cx, face_cy, face_scale) = if menu_open {
+        // Face moved to right side, slightly smaller
+        (96, 32, 0.65)
+    } else {
+        // Face centered, full size
+        (64, 30, 1.0)
+    };
 
     // Subtle bobbing
     let bob = match (frame / 10) % 4 {
@@ -106,8 +181,9 @@ where
     };
 
     let eye_center_y = face_cy - 10 + bob + eye_dy;
-    let left_eye_x = face_cx - 18 + eye_dx;
-    let right_eye_x = face_cx + 18 + eye_dx;
+    let eye_offset_x = ((18.0 * face_scale) as i32).max(1);
+    let left_eye_x = face_cx - eye_offset_x + eye_dx;
+    let right_eye_x = face_cx + eye_offset_x + eye_dx;
 
     // Blink + occasional wink
     let blink = frame % 84;
@@ -115,9 +191,9 @@ where
     let wink_phase = frame % 280;
     let right_wink = wink_phase > 220 && wink_phase < 236;
 
-    // Rounded-vertical eye shape helper (drawn inline with circles + rectangle)
-    let eye_w = 16;
-    let eye_h = 26;
+    // Rounded-vertical eye shape helper (scaled based on menu state)
+    let eye_w = ((16.0 * face_scale) as i32).max(2);
+    let eye_h = ((26.0 * face_scale) as i32).max(2);
     let eye_r = eye_w / 2;
 
     let draw_open_eye = |display: &mut D, center_x: i32| {
@@ -126,7 +202,7 @@ where
 
         Rectangle::new(
             Point::new(x, y + eye_r),
-            Size::new(eye_w as u32, (eye_h - eye_w) as u32),
+            Size::new(eye_w as u32, (eye_h - eye_w).max(0) as u32),
         )
         .into_styled(fill)
         .draw(display)
@@ -237,32 +313,85 @@ where
             .ok();
     }
 
-    // Brand label – bottom-right
-    let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-    Text::new("EspOS", Point::new(96, 63), style)
+    // Render menu if open
+    if menu_open {
+        render_menu(display, selected_item, frame, small_font);
+    }
+
+    // Brand label – bottom-right, smaller when menu is open
+    let style = if menu_open {
+        MonoTextStyle::new(&FONT_5X8, BinaryColor::On)
+    } else {
+        MonoTextStyle::new(&FONT_6X10, BinaryColor::On)
+    };
+    let espos_x = if menu_open { 102 } else { 96 };
+    Text::new("EspOS", Point::new(espos_x, 63), style)
         .draw(display)
         .ok();
 
     // Live stats – bottom-left (FONT_5X8: 5px wide, 8px tall)
-    // Line 1 (y=56): free RAM in KB
-    // Line 2 (y=63): CPU %
-    let small = MonoTextStyle::new(&FONT_5X8, BinaryColor::On);
     let free_kb = crate::memory::heap_free() / 1024;
     let cpu = crate::tasks::telemetry::LAST_CPU_PERCENT.load(
         core::sync::atomic::Ordering::Relaxed,
     );
 
-    let mut ram_str: heapless::String<12> = heapless::String::new();
-    let _ = core::fmt::write(&mut ram_str, format_args!("R:{free_kb}K", free_kb = free_kb));
-    Text::new(ram_str.as_str(), Point::new(0, 56), small)
-        .draw(display)
-        .ok();
+    if !menu_open {
+        let mut ram_str: heapless::String<12> = heapless::String::new();
+        let _ = core::fmt::write(&mut ram_str, format_args!("R:{free_kb}K", free_kb = free_kb));
+        Text::new(ram_str.as_str(), Point::new(0, 56), small_font)
+            .draw(display)
+            .ok();
 
-    let mut cpu_str: heapless::String<8> = heapless::String::new();
-    let _ = core::fmt::write(&mut cpu_str, format_args!("C:{cpu}%", cpu = cpu));
-    Text::new(cpu_str.as_str(), Point::new(0, 63), small)
-        .draw(display)
-        .ok();
+        let mut cpu_str: heapless::String<8> = heapless::String::new();
+        let _ = core::fmt::write(&mut cpu_str, format_args!("C:{cpu}%", cpu = cpu));
+        Text::new(cpu_str.as_str(), Point::new(0, 63), small_font)
+            .draw(display)
+            .ok();
+    }
+}
+
+/// Render the menu UI on the left side of the display
+fn render_menu<D>(
+    display: &mut D,
+    selected: MenuItem,
+    _frame: u32,
+    style: MonoTextStyle<'_, BinaryColor>,
+)
+where
+    D: DrawTarget<Color = BinaryColor, Error = core::convert::Infallible>,
+{
+    let items = [MenuItem::Talk, MenuItem::State, MenuItem::Settings, MenuItem::Help];
+    let item_height = 14;
+    let menu_left = 2;
+    let menu_top = 4;
+
+    for (idx, &item) in items.iter().enumerate() {
+        let y = menu_top + (idx as i32 * item_height);
+        let is_selected = item == selected;
+
+        if is_selected {
+            // Draw filled white rectangle for selected item
+            let fill = PrimitiveStyle::with_fill(BinaryColor::On);
+            Rectangle::new(
+                Point::new(menu_left, y),
+                Size::new(50, (item_height - 2) as u32),
+            )
+            .into_styled(fill)
+            .draw(display)
+            .ok();
+
+            // Draw text in black (inverted)
+            let inverted_style = MonoTextStyle::new(&FONT_5X8, BinaryColor::Off);
+            Text::new(item.to_str(), Point::new(menu_left + 2, y + 9), inverted_style)
+                .draw(display)
+                .ok();
+        } else {
+            // Draw text in white (normal)
+            Text::new(item.to_str(), Point::new(menu_left + 2, y + 9), style)
+                .draw(display)
+                .ok();
+        }
+    }
 }
 /// Apply a single [`UiDrawCommand`] to the display.
 fn compose(cmd: &UiDrawCommand, mood: &mut FaceMood) {
@@ -338,7 +467,21 @@ pub async fn ui_task(
     let mut mood = FaceMood::Happy;
     let mut eye_dx: i32 = 0;
     let mut eye_dy: i32 = 0;
+    let mut menu_open = false;
+    let mut selected_item = MenuItem::Talk;
+    let mut menu_timeout: u32 = 0;
+    let mut last_joystick_active = false;
+    let mut last_nav_direction: i32 = 0; // Track last navigation direction for debouncing
+    let mut last_selection_frame: u32 = 0; // Prevent rapid selection events
+
     loop {
+        // Memory diagnostics every 5 seconds (150 frames @ 30fps)
+        if frame % 150 == 0 {
+            let free_kb = crate::memory::heap_free() / 1024;
+            let used_kb = crate::memory::heap_used() / 1024;
+            log::debug!("[ui] Heap: {}KB used, {}KB free", used_kb, free_kb);
+        }
+
         // Wait for a draw command with timeout
         match embassy_time::with_timeout(
             embassy_time::Duration::from_millis(FRAME_PERIOD_MS),
@@ -362,12 +505,82 @@ pub async fn ui_task(
         let raw_x = adc.read_blocking(&mut joy_x);
         let raw_y = adc.read_blocking(&mut joy_y);
 
-        let target_dx = axis_to_offset(raw_x);
-        let target_dy = -axis_to_offset(raw_y);
-        eye_dx = (eye_dx * 3 + target_dx) / 4;
-        eye_dy = (eye_dy * 3 + target_dy) / 4;
+        // Detect joystick movement (center is 2048)
+        let is_joystick_active = (raw_x as i32 - 2048).abs() > 180 || (raw_y as i32 - 2048).abs() > 180;
 
-        render_scene(&mut display, mood, frame, eye_dx, eye_dy);
+        // Open menu on first joystick movement (only when menu is closed)
+        if !menu_open && is_joystick_active && !last_joystick_active {
+            menu_open = true;
+            menu_timeout = 300; // 10 seconds at 30 FPS
+            selected_item = MenuItem::Talk; // Always start with first item
+            last_nav_direction = 0; // Reset navigation state
+            log::debug!("[ui] Menu opened, starting at Talk");
+        }
+        last_joystick_active = is_joystick_active;
+
+        // Menu navigation with joystick
+        if menu_open {
+            let target_dx = axis_to_offset(raw_x);
+            let target_dy = -axis_to_offset(raw_y);
+
+            // Navigate menu with vertical movement (debounced)
+            // Only change selection when transitioning to a new direction
+            if target_dy < -3 && last_nav_direction != -1 {
+                selected_item = selected_item.prev();
+                menu_timeout = 300;
+                last_nav_direction = -1;
+                log::debug!("[ui] Menu nav: UP to {:?}", selected_item);
+            } else if target_dy > 3 && last_nav_direction != 1 {
+                selected_item = selected_item.next();
+                menu_timeout = 300;
+                last_nav_direction = 1;
+                log::debug!("[ui] Menu nav: DOWN to {:?}", selected_item);
+            } else if target_dy.abs() <= 3 {
+                // Reset when joystick returns to center
+                last_nav_direction = 0;
+            }
+
+            // Select item with horizontal push (left or right)
+            // Add frame-based debouncing to prevent rapid selection events
+            if target_dx.abs() > 3 && (frame - last_selection_frame) > 15 {
+                log::info!("[ui] Menu item selected: {:?}", selected_item);
+                match UI_EVENT_CHANNEL.try_send(UiEvent::MenuItemSelected(selected_item)) {
+                    Ok(_) => {
+                        log::debug!("[ui] Event sent successfully");
+                        last_selection_frame = frame;
+                        menu_open = false;
+                        menu_timeout = 0;
+                        last_nav_direction = 0; // Reset navigation state
+                    }
+                    Err(_) => {
+                        log::warn!("[ui] UI_EVENT_CHANNEL full! State machine not processing events.");
+                        // Keep menu open if we couldn't send the event
+                        // Reset selection frame so user can retry on next frame
+                        last_selection_frame = frame;
+                    }
+                }
+            }
+
+            // Auto-close menu after timeout
+            if menu_timeout > 0 {
+                menu_timeout -= 1;
+            } else {
+                menu_open = false;
+                last_nav_direction = 0; // Reset navigation state
+            }
+
+            // Reset eye position when menu is open
+            eye_dx = 0;
+            eye_dy = 0;
+        } else {
+            last_nav_direction = 0; // Reset when menu is closed
+            let target_dx = axis_to_offset(raw_x);
+            let target_dy = -axis_to_offset(raw_y);
+            eye_dx = (eye_dx * 3 + target_dx) / 4;
+            eye_dy = (eye_dy * 3 + target_dy) / 4;
+        }
+
+        render_scene(&mut display, mood, frame, eye_dx, eye_dy, menu_open, selected_item);
         let _ = display.flush();
 
         // Update animation frame counter

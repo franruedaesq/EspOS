@@ -91,8 +91,7 @@ pub trait SpatialSensor {
 // ---------------------------------------------------------------------------
 
 use crate::drivers::{mpu6500::Mpu6500, vl53l0x::Vl53l0x};
-use esp_hal::i2c::master::I2c;
-use esp_hal::Blocking;
+
 
 /// Combines an MPU-6500 IMU and a VL53L0X distance sensor on the same I²C bus
 /// into a single [`SpatialSensor`] implementation.

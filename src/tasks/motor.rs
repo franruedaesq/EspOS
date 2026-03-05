@@ -11,7 +11,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::Timer;
 
-use crate::hal::chassis::RoverChassis;
+
 
 // ---------------------------------------------------------------------------
 // Command type

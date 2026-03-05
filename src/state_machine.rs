@@ -30,7 +30,7 @@ use embassy_time::Timer;
 use crate::tasks::can_bus::COLLISION_CHANNEL;
 use crate::tasks::imu::IMU_CHANNEL;
 use crate::tasks::motor::{MotorCommand, MOTOR_CHANNEL};
-use crate::tasks::ui::{UiDrawCommand, UI_DRAW_CHANNEL};
+use crate::tasks::ui::{MenuItem, UiDrawCommand, UiEvent, UI_DRAW_CHANNEL, UI_EVENT_CHANNEL};
 use crate::tasks::wifi::IP_CHANNEL;
 
 // ---------------------------------------------------------------------------
@@ -113,6 +113,79 @@ pub async fn run(_spawner: &Spawner) {
             );
             handle_emergency_stop().await;
             state = RoverState::EmergencyStop;
+        }
+
+        // ---- UI event handling (menu selections) ----------------------------
+        // Drain all pending UI events to prevent channel overflow
+        while let Ok(ui_event) = UI_EVENT_CHANNEL.try_receive() {
+            match ui_event {
+                UiEvent::MenuItemSelected(item) => {
+                    log::info!("[state_machine] Menu item selected: {:?}", item);
+                    match item {
+                        MenuItem::Talk => {
+                            // Transition to Listening state for speech recognition
+                            if ip_address.is_some() {
+                                state = RoverState::Listening;
+                                update_state_ui("Listening").await;
+                                push_ui(UiDrawCommand::StatusText({
+                                    let mut s = heapless::String::new();
+                                    let _ = core::fmt::write(&mut s, format_args!("Ready to listen..."));
+                                    s
+                                }))
+                                .await;
+                            } else {
+                                push_ui(UiDrawCommand::StatusText({
+                                    let mut s = heapless::String::new();
+                                    let _ = core::fmt::write(&mut s, format_args!("WiFi not ready"));
+                                    s
+                                }))
+                                .await;
+                            }
+                        }
+                        MenuItem::State => {
+                            // Display current state information
+                            push_ui(UiDrawCommand::StatusText({
+                                let mut s = heapless::String::new();
+                                let state_name = match &state {
+                                    RoverState::Idle => "Idle",
+                                    RoverState::Listening => "Listening",
+                                    RoverState::Processing { .. } => "Processing",
+                                    RoverState::Moving { .. } => "Moving",
+                                    RoverState::Reporting => "Reporting",
+                                    RoverState::EmergencyStop => "Emergency",
+                                };
+                                let _ = core::fmt::write(&mut s, format_args!("State: {}", state_name));
+                                s
+                            }))
+                            .await;
+                        }
+                        MenuItem::Settings => {
+                            // Placeholder for settings menu/configuration
+                            push_ui(UiDrawCommand::StatusText({
+                                let mut s = heapless::String::new();
+                                let _ = core::fmt::write(&mut s, format_args!("Settings (TBD)"));
+                                s
+                            }))
+                            .await;
+                        }
+                        MenuItem::Help => {
+                            // Display help information
+                            push_ui(UiDrawCommand::StatusText({
+                                let mut s = heapless::String::new();
+                                let _ = core::fmt::write(&mut s, format_args!("Joystick: Navigate menu"));
+                                s
+                            }))
+                            .await;
+                        }
+                    }
+                }
+                UiEvent::MenuOpened => {
+                    log::debug!("[state_machine] Menu opened");
+                }
+                UiEvent::MenuClosed => {
+                    log::debug!("[state_machine] Menu closed");
+                }
+            }
         }
 
         // ---- State-specific logic ----------------------------------------

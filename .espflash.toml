@@ -1,0 +1,11 @@
+# espflash configuration for ESP32-S3 board
+[flashing]
+# Uncomment and change to your device's serial port when connected
+# port = "/dev/cu.usbserial-XXXX"
+
+[flasher]
+# Flash mode configuration
+mode = "dio"
+
+# Optional: Uncomment to specify a particular port without interactive selection
+# port = "/dev/cu.SLAB_USBtoUART"
