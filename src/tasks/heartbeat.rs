@@ -13,7 +13,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_executor::task;
-use embassy_time::Timer;
+use embassy_time::{Duration, Timer};
 use esp_hal::gpio::Output;
 use esp_hal::timer::timg::Wdt;
 
@@ -52,9 +52,11 @@ pub async fn heartbeat_task(
 
     loop {
         led.set_high();
+        crate::tasks::telemetry::record_idle(Duration::from_millis(500));
         Timer::after_millis(500).await;
 
         led.set_low();
+        crate::tasks::telemetry::record_idle(Duration::from_millis(500));
         Timer::after_millis(500).await;
 
         // Increment the loop counter for the telemetry task first, then feed

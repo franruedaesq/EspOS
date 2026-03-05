@@ -217,7 +217,12 @@ async fn main(spawner: Spawner) {
     // UI task - pass I2C bus to SSD1306 driver
     esp_println::println!("=== Spawning UI task ===");
     spawner
-        .spawn(tasks::ui::ui_task(i2c))
+        .spawn(tasks::ui::ui_task(
+            i2c,
+            peripherals.ADC1,
+            peripherals.GPIO1,
+            peripherals.GPIO2,
+        ))
         .expect("spawn ui_task");
     esp_println::println!("=== UI task spawned ===");
 

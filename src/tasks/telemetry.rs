@@ -7,6 +7,7 @@
 //! |------------------|-----------------------------------------------------|
 //! | `ram_used`       | Global heap allocator (`ALLOCATOR.used()`)          |
 //! | `ram_free`       | Global heap allocator (`ALLOCATOR.free()`)          |
+//! | `cpu_percent`    | Estimated CPU load (100% - idle time)               |
 //! | `heartbeat_hz`   | [`HEARTBEAT_TICKS`] counter reset every 1 s         |
 //! | `battery_mv`     | ADC pin (placeholder until hardware is wired)       |
 //!
@@ -33,13 +34,26 @@
 //! Your React front-end can subscribe to `espos/telemetry` and draw live graphs
 //! from the streamed JSON objects.
 
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_executor::task;
-use embassy_time::Timer;
+use embassy_time::{Duration, Instant, Timer};
 
 use crate::memory;
 use crate::tasks::heartbeat::HEARTBEAT_TICKS;
+
+// CPU idle time tracking (microseconds spent sleeping)
+static IDLE_TIME_US: AtomicU32 = AtomicU32::new(0);
+
+/// Last measured CPU usage percentage (0–100). Updated every 1 s.
+/// Read by the UI task to display live stats on screen.
+pub static LAST_CPU_PERCENT: AtomicU32 = AtomicU32::new(0);
+
+/// Record idle/sleep time for CPU usage estimation.
+/// Call this before entering long sleep periods.
+pub fn record_idle(duration: Duration) {
+    IDLE_TIME_US.fetch_add(duration.as_micros() as u32, Ordering::Relaxed);
+}
 
 // ---------------------------------------------------------------------------
 // Task implementation
@@ -56,11 +70,23 @@ pub async fn telemetry_task() {
     log::info!("[telemetry] task started");
 
     loop {
+        let start = Instant::now();
         Timer::after_millis(1_000).await;
+        let elapsed_us = start.elapsed().as_micros() as u32;
 
         // ---- RAM usage --------------------------------------------------
         let ram_used = memory::heap_used();
         let ram_free = memory::heap_free();
+
+        // ---- CPU load ---------------------------------------------------
+        // Estimate CPU usage: 100% - (idle_time / total_time * 100)
+        let idle_us = IDLE_TIME_US.swap(0, Ordering::Relaxed);
+        let cpu_percent = if elapsed_us > 0 {
+            100u32.saturating_sub((idle_us * 100) / elapsed_us)
+        } else {
+            0
+        };
+        LAST_CPU_PERCENT.store(cpu_percent, Ordering::Relaxed);
 
         // ---- CPU load (heartbeat ticks per second) ----------------------
         // Atomically swap the counter with 0 so each 1-second window is
@@ -92,10 +118,11 @@ pub async fn telemetry_task() {
             format_args!(
                 concat!(
                     r#"{{"ram_used":{ram},"ram_free":{free},"#,
-                    r#""heartbeat_hz":{hz},"battery_mv":{batt}}}"#,
+                    r#""cpu_percent":{cpu},"heartbeat_hz":{hz},"battery_mv":{batt}}}"#,
                 ),
                 ram  = ram_used,
                 free = ram_free,
+                cpu  = cpu_percent,
                 hz   = heartbeat_hz,
                 batt = battery_mv,
             ),
