@@ -10,3 +10,10 @@ target = "xtensa-esp32s3-none-elf"
 
 [unstable]
 build-std = ["core", "alloc"]
+
+[env]
+# Disable the Xtensa `waiti` low-power sleep in the Embassy executor.
+# Wokwi does not properly resume CPU execution after `waiti 0`, so timers
+# would hang forever. On real hardware this can be re-enabled for lower
+# power consumption.
+ESP_HAL_EMBASSY_CONFIG_LOW_POWER_WAIT = "false"

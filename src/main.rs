@@ -14,7 +14,7 @@
 //! 1. `esp_hal::init` – clock tree, GPIO matrix, etc.
 //! 2. [`memory::init_heap`] – register 512 KB SRAM with the global allocator.
 //! 3. [`memory::init_psram!`] – register 8 MB PSRAM with the global allocator.
-//! 4. Embassy timer init (`esp_hal_embassy::init`).
+//! 4. Embassy timer init (`esp_hal_embassy::init` with SYSTIMER alarm0).
 //! 5. Hardware watchdog enable (TIMG1 MWDT, 10-second timeout).
 //! 6. Spawn all async tasks.
 //! 7. Enter [`state_machine::run`] – never returns.
@@ -30,7 +30,8 @@ use esp_backtrace as _;
 use embassy_executor::Spawner;
 use esp_hal::{
     gpio::{Level, Output},
-    timer::timg::{MwdtStage, TimerGroup},
+    timer::systimer::SystemTimer,
+    timer::timg::TimerGroup,
 };
 use log::info;
 
@@ -50,16 +51,28 @@ mod tasks;
 /// * Creates an Embassy executor and passes a [`Spawner`] handle here.
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
+    // Use direct println before anything else to verify boot
+    esp_println::println!("\\n\\n=== EspOS Starting ===");
+
     // -------------------------------------------------------------------------
     // 1. Initialise ESP32-S3 hardware
     // -------------------------------------------------------------------------
     let peripherals = esp_hal::init(esp_hal::Config::default());
+    esp_println::println!("=== HAL initialized ===");
+
+    // Disable RTC watchdog immediately to prevent boot resets
+    let mut rtc = esp_hal::rtc_cntl::Rtc::new(peripherals.LPWR);
+    rtc.rwdt.disable();
+
+    // Use direct println before logger init to verify UART works
+    esp_println::println!("=== EspOS Boot Stage 1 ===");
 
     // -------------------------------------------------------------------------
     // 2. Heap allocators
     //    SRAM first (needed before any alloc), then PSRAM.
     // -------------------------------------------------------------------------
     memory::init_heap();
+    esp_println::println!("=== Heap initialized ===");
     // Enable 8 MB octal PSRAM and register it with the allocator.
     // Uncomment when PSRAM is physically present:
     // memory::init_psram!(peripherals.PSRAM);
@@ -67,34 +80,36 @@ async fn main(spawner: Spawner) {
     // -------------------------------------------------------------------------
     // 3. Logging (over UART0 via esp-println)
     // -------------------------------------------------------------------------
+    esp_println::println!("=== Initializing logger ===");
     esp_println::logger::init_logger_from_env();
-    info!("EspOS v{} booting on ESP32-S3…", env!("CARGO_PKG_VERSION"));
+    esp_println::println!("=== Logger initialized, testing info macro ===");
+    info!("EspOS v{} booting on ESP32-S3...", env!("CARGO_PKG_VERSION"));
+    esp_println::println!("=== Info macro works ===");
 
     // -------------------------------------------------------------------------
     // 4. Embassy timer back-end
-    //    Uses TIMG0 timer 0 as the Embassy time-keeper.
+    //    ESP32-S3: use SYSTIMER alarm0 as the Embassy time source.
+    //    Note: ESP_HAL_EMBASSY_CONFIG_LOW_POWER_WAIT=false must be set in
+    //    .cargo/config.toml \u2014 the default `waiti` sleep is incompatible with
+    //    Wokwi's Xtensa simulator.
     // -------------------------------------------------------------------------
-    let timg0 = TimerGroup::new(peripherals.TIMG0);
-    esp_hal_embassy::init(timg0.timer0);
+    esp_println::println!("=== Initializing Embassy timer ===");
+    let systimer = SystemTimer::new(peripherals.SYSTIMER);
+    esp_println::println!("=== SYSTIMER created ===");
+    esp_hal_embassy::init(systimer.alarm0);
+    esp_println::println!("=== Embassy timer initialized ===");
 
     // -------------------------------------------------------------------------
-    // 5. Hardware Watchdog Timer (TIMG1 MWDT, 10-second timeout)
-    //
-    //    If the firmware ever freezes or enters an infinite non-yielding loop
-    //    the MWDT will forcefully reboot the ESP32-S3 after 10 seconds.
-    //    The heartbeat_task feeds the watchdog every ~1 second during normal
-    //    operation, so the timeout is never reached when the system is healthy.
+    // 5. Hardware watchdog (TIMG1) - DISABLED for Wokwi
+    //    In Wokwi simulation, watchdogs can cause boot loops because tasks
+    //    don't start running until after main() returns to the executor.
+    //    On real hardware, re-enable this and feed it from the heartbeat task.
     // -------------------------------------------------------------------------
+    esp_println::println!("=== Disabling hardware watchdog ===");
     let timg1 = TimerGroup::new(peripherals.TIMG1);
     let mut wdt1 = timg1.wdt;
-    // Stage 0: reset the chip after 10 seconds without a feed.
-    const WDT_TIMEOUT_US: u64 = 10_000_000; // 10 seconds in microseconds
-    wdt1.set_timeout(
-        MwdtStage::Stage0,
-        fugit::MicrosDurationU64::from_ticks(WDT_TIMEOUT_US),
-    );
-    wdt1.enable();
-    info!("EspOS: hardware watchdog enabled (10 s timeout)");
+    wdt1.disable();
+    esp_println::println!("=== Hardware watchdog disabled ===");
 
     // -------------------------------------------------------------------------
     // 6. Peripheral setup
@@ -104,6 +119,13 @@ async fn main(spawner: Spawner) {
     // GPIO 48 is the on-board RGB LED on most ESP32-S3 DevKitC boards.
     // Adjust to match your hardware.
     let led = Output::new(peripherals.GPIO48, Level::Low);
+
+    // Spawn heartbeat for LED blinking
+    esp_println::println!("=== Spawning heartbeat task ===");
+    spawner
+        .spawn(tasks::heartbeat::heartbeat_task(led, wdt1))
+        .expect("spawn heartbeat_task");
+    esp_println::println!("=== Heartbeat task spawned ===");
 
     // -- I²C bus for IMU + ToF ------------------------------------------------
     // SDA = GPIO 8, SCL = GPIO 9 (common DevKit mapping).
@@ -122,43 +144,23 @@ async fn main(spawner: Spawner) {
     // let in3 = Output::new(peripherals.GPIO6,  Level::Low);
     // let in4 = Output::new(peripherals.GPIO7,  Level::Low);
 
-    // -- ST7789 SPI display ---------------------------------------------------
-    // let dc  = Output::new(peripherals.GPIO2,  Level::Low);
-    // let rst = Output::new(peripherals.GPIO3,  Level::High);
-    // let cs  = Output::new(peripherals.GPIO10, Level::High);
-
-    // -- ST7789 SPI display (Wokwi Configuration) -----------------------------
-    use esp_hal::spi::master::{Config as SpiConfig, Spi};
-    use esp_hal::spi::Mode as SpiMode;
+    // -- SSD1306 I2C display (Wokwi Configuration) ----------------------------
+    esp_println::println!("=== Setting up I2C for SSD1306 ===");
+    use esp_hal::i2c::master::{Config as I2cConfig, I2c};
     use esp_hal::time::RateExtU32;
 
-    let mosi = peripherals.GPIO11;
-    let sck  = peripherals.GPIO12;
+    let mut i2c_cfg = I2cConfig::default();
+    i2c_cfg.frequency = 400.kHz();
 
-    let mut spi_config = SpiConfig::default();
-    spi_config.frequency = 40.MHz();
-    spi_config.mode = SpiMode::_0;
-
-    let spi = Spi::new(peripherals.SPI2, spi_config)
+    let i2c = I2c::new(peripherals.I2C0, i2c_cfg)
         .unwrap()
-        .with_sck(sck)
-        .with_mosi(mosi);
-
-    let dc  = Output::new(peripherals.GPIO2,  Level::Low);
-    let rst = Output::new(peripherals.GPIO3,  Level::High);
-    let cs  = Output::new(peripherals.GPIO10, Level::High);
-
-    // If you want to test the UI logic immediately, you can initialize the driver here
-    // let mut display_driver = drivers::st7789::St7789Driver::new(dc, rst, cs);
+        .with_sda(peripherals.GPIO8)
+        .with_scl(peripherals.GPIO9);
+    esp_println::println!("=== I2C and pins configured ===");
 
     // -------------------------------------------------------------------------
-    // 7. Spawn tasks – Core 0
+    // 7. Spawn remaining tasks
     // -------------------------------------------------------------------------
-
-    // Heartbeat: 1 Hz LED blink, hardware WDT feed, and CPU-load counter.
-    spawner
-        .spawn(tasks::heartbeat::heartbeat_task(led, wdt1))
-        .expect("spawn heartbeat_task");
 
     // WiFi + embassy-net tasks.
     // Requires esp-wifi controller and network stack to be initialised first.
@@ -212,15 +214,17 @@ async fn main(spawner: Spawner) {
         .spawn(tasks::can_bus::can_bus_task())
         .expect("spawn can_bus_task");
 
-    // UI framebuffer renderer + ST7789 SPI sync.
+    // UI task - pass I2C bus to SSD1306 driver
+    esp_println::println!("=== Spawning UI task ===");
     spawner
-        .spawn(tasks::ui::ui_task())
+        .spawn(tasks::ui::ui_task(i2c))
         .expect("spawn ui_task");
+    esp_println::println!("=== UI task spawned ===");
 
     // -------------------------------------------------------------------------
     // 10. Agentic state machine (runs on this task, Core 0)
     // -------------------------------------------------------------------------
-    info!("EspOS: all tasks spawned – entering state machine");
+    esp_println::println!("=== All tasks spawned, entering state machine ===");
     state_machine::run(&spawner).await;
 
     // Unreachable – state_machine::run loops forever.

@@ -20,19 +20,19 @@
 //! increases downward.
 
 use esp_hal::gpio::Output;
+use esp_hal::spi::master::Spi;
+use esp_hal::Blocking;
+use embedded_graphics::{
+    draw_target::DrawTarget,
+    geometry::{OriginDimensions, Size},
+    pixelcolor::{raw::RawU16, Rgb565},
+    Pixel,
+    primitives::Rectangle,
+    prelude::RawData,
+};
 
-// ---------------------------------------------------------------------------
-// Display constants
-// ---------------------------------------------------------------------------
-
-/// Display width in pixels.
-pub const WIDTH: u16 = 240;
-/// Display height in pixels.
+pub const WIDTH: u16 = 320;
 pub const HEIGHT: u16 = 240;
-
-// ---------------------------------------------------------------------------
-// ST7789 command codes
-// ---------------------------------------------------------------------------
 
 #[allow(dead_code)]
 mod cmd {
@@ -51,154 +51,182 @@ mod cmd {
     pub const COLMOD: u8 = 0x3A;
 }
 
-// ---------------------------------------------------------------------------
-// Error type
-// ---------------------------------------------------------------------------
-
-/// Errors that can occur when communicating with the ST7789.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum St7789Error {
-    /// SPI transfer failed.
-    SpiError,
-    /// GPIO operation failed.
-    GpioError,
+pub struct St7789Driver<'a> {
+    dc: Output<'a>,
+    rst: Output<'a>,
+    cs: Output<'a>,
+    spi: Spi<'a, Blocking>,
 }
 
-// ---------------------------------------------------------------------------
-// Driver struct
-// ---------------------------------------------------------------------------
-
-/// Driver for the ST7789 240×240 TFT display.
-///
-/// In a real build the SPI field holds an `esp_hal::spi::master::Spi` handle.
-/// It is left as a `()` here so the driver type-checks without the concrete
-/// peripheral type (which varies by pin assignment).
-pub struct St7789Driver {
-    /// Data/command select pin: HIGH = data, LOW = command.
-    dc: Output<'static>,
-    /// Active-low reset pin.
-    rst: Output<'static>,
-    /// Active-low chip-select pin.
-    cs: Output<'static>,
-    // spi: Spi<'static, esp_hal::Blocking>,  // wired in the real build
-}
-
-impl St7789Driver {
-    /// Construct a new driver and perform the hardware initialisation sequence.
-    ///
-    /// # Arguments
-    /// * `dc`  – data/command GPIO (output).
-    /// * `rst` – active-low reset GPIO (output).
-    /// * `cs`  – active-low chip-select GPIO (output).
+impl<'a> St7789Driver<'a> {
     pub fn new(
-        dc: Output<'static>,
-        rst: Output<'static>,
-        cs: Output<'static>,
+        dc: Output<'a>,
+        rst: Output<'a>,
+        cs: Output<'a>,
+        spi: Spi<'a, Blocking>,
     ) -> Self {
-        let mut driver = Self { dc, rst, cs };
+        let mut driver = Self { dc, rst, cs, spi };
         driver.hard_reset();
         driver.init_sequence();
         driver
     }
 
-    // ---- Initialisation -------------------------------------------------
-
     fn hard_reset(&mut self) {
+        esp_println::println!("[st7789] Starting hard reset...");
         self.rst.set_low();
-        // ~10 ms reset pulse at ~80 MHz CPU (200 000 × ~5 ns ≈ 10 ms).
-        // Blocking busy-wait is acceptable here because this runs once at boot.
-        for _ in 0..200_000u32 {
-            core::hint::spin_loop();
-        }
+        // Keep reset low long enough for ILI9341 to latch reset.
+        self.delay_ms(10);
         self.rst.set_high();
-        // Allow ≥5 ms for the panel to exit reset before sending commands.
-        for _ in 0..200_000u32 {
-            core::hint::spin_loop();
-        }
+        // Wait after reset release before sending commands.
+        self.delay_ms(120);
+        esp_println::println!("[st7789] Hard reset complete");
     }
 
     fn init_sequence(&mut self) {
-        // Software reset + sleep-out.
+        esp_println::println!("[st7789] Starting init sequence...");
         self.write_command(cmd::SWRESET);
+        esp_println::println!("[st7789] SWRESET sent");
         self.delay_ms(150);
-
         self.write_command(cmd::SLPOUT);
-        self.delay_ms(10);
-
-        // 16-bit colour (RGB565).
+        esp_println::println!("[st7789] SLPOUT sent");
+        // Critical: ILI9341 needs >=120ms after SLPOUT.
+        self.delay_ms(120);
+        // 16-bit RGB565 pixel format
         self.write_command(cmd::COLMOD);
         self.write_data(&[0x55]);
-
-        // Memory data access control: MX + MV for landscape if needed.
+        esp_println::println!("[st7789] RGB565 mode set");
+        self.delay_ms(10);
+        // MADCTL tuned for Wokwi ILI9341 landscape.
         self.write_command(cmd::MADCTL);
-        self.write_data(&[0x00]);
-
-        // Normal display mode on.
+        self.write_data(&[0x48]);
+        self.write_command(cmd::INVOFF);
         self.write_command(cmd::NORON);
+        esp_println::println!("[st7789] Display mode configured");
         self.delay_ms(10);
-
-        // Inversion on (most ST7789 modules need this for correct colours).
-        self.write_command(cmd::INVON);
-
-        // Display on.
         self.write_command(cmd::DISPON);
-        self.delay_ms(10);
+        esp_println::println!("[st7789] Display ON");
+        self.delay_ms(50);
+        esp_println::println!("[st7789] Init sequence complete");
     }
 
-    // ---- Drawing API ----------------------------------------------------
-
-    /// Set the active pixel window (column / row address ranges).
+    /// Sets the drawing window AND issues RAMWR.
+    /// CS is left LOW so the caller can stream pixel data immediately.
     pub fn set_address_window(&mut self, x0: u16, y0: u16, x1: u16, y1: u16) {
-        self.write_command(cmd::CASET);
-        self.write_data(&[
-            (x0 >> 8) as u8, (x0 & 0xFF) as u8,
-            (x1 >> 8) as u8, (x1 & 0xFF) as u8,
-        ]);
-
-        self.write_command(cmd::RASET);
-        self.write_data(&[
-            (y0 >> 8) as u8, (y0 & 0xFF) as u8,
-            (y1 >> 8) as u8, (y1 & 0xFF) as u8,
-        ]);
-
-        self.write_command(cmd::RAMWR);
-    }
-
-    /// Flush a full-screen RGB565 framebuffer to the display.
-    ///
-    /// `buf` must be exactly `WIDTH * HEIGHT * 2` bytes.
-    ///
-    /// In a real build this would use SPI DMA to avoid blocking the CPU.
-    pub fn flush(&mut self, buf: &[u8]) {
-        self.set_address_window(0, 0, WIDTH - 1, HEIGHT - 1);
         self.cs.set_low();
-        self.dc.set_high();
-        // spi.write(buf).ok();  // real SPI transfer
-        let _ = buf;
-        self.cs.set_high();
-    }
 
-    // ---- Low-level SPI helpers ------------------------------------------
+        self.dc.set_low();
+        let _ = self.spi.write_bytes(&[cmd::CASET]);
+        self.dc.set_high();
+        let _ = self.spi.write_bytes(&[(x0 >> 8) as u8, (x0 & 0xFF) as u8, (x1 >> 8) as u8, (x1 & 0xFF) as u8]);
+
+        self.dc.set_low();
+        let _ = self.spi.write_bytes(&[cmd::RASET]);
+        self.dc.set_high();
+        let _ = self.spi.write_bytes(&[(y0 >> 8) as u8, (y0 & 0xFF) as u8, (y1 >> 8) as u8, (y1 & 0xFF) as u8]);
+
+        self.dc.set_low();
+        let _ = self.spi.write_bytes(&[cmd::RAMWR]);
+        self.dc.set_high();
+        // CS stays LOW — caller must set CS high when done writing pixels.
+    }
 
     fn write_command(&mut self, cmd: u8) {
         self.cs.set_low();
         self.dc.set_low();
-        // spi.write(&[cmd]).ok();
-        let _ = cmd;
+        let _ = self.spi.write_bytes(&[cmd]);
         self.cs.set_high();
     }
 
     fn write_data(&mut self, data: &[u8]) {
         self.cs.set_low();
         self.dc.set_high();
-        // spi.write(data).ok();
-        let _ = data;
+        let _ = self.spi.write_bytes(data);
         self.cs.set_high();
     }
 
+    /// Write pixel data bytes while CS is already held LOW.
+    fn write_data_continue(&mut self, data: &[u8]) {
+        let _ = self.spi.write_bytes(data);
+    }
+
     fn delay_ms(&self, ms: u32) {
-        for _ in 0..(ms * 20_000) {
-            core::hint::spin_loop();
+        for _ in 0..(ms * 20_000) { core::hint::spin_loop(); }
+    }
+}
+
+// ---- Implementación Gráfica (El traductor de píxeles) ----
+
+impl<'a> OriginDimensions for St7789Driver<'a> {
+    fn size(&self) -> Size {
+        Size::new(WIDTH as u32, HEIGHT as u32)
+    }
+}
+
+impl<'a> DrawTarget for St7789Driver<'a> {
+    type Color = Rgb565;
+    type Error = core::convert::Infallible;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        for Pixel(coord, color) in pixels.into_iter() {
+            if coord.x >= 0 && coord.x < WIDTH as i32 && coord.y >= 0 && coord.y < HEIGHT as i32 {
+                // set_address_window leaves CS LOW with DC HIGH, ready for pixel data
+                self.set_address_window(coord.x as u16, coord.y as u16, coord.x as u16, coord.y as u16);
+                let raw = RawU16::from(color).into_inner();
+                self.write_data_continue(&[(raw >> 8) as u8, (raw & 0xFF) as u8]);
+                self.cs.set_high();
+            }
         }
+        Ok(())
+    }
+
+    fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Self::Color>,
+    {
+        if area.size.width == 0 || area.size.height == 0 {
+            return Ok(());
+        }
+
+        let x0 = area.top_left.x.max(0) as u16;
+        let y0 = area.top_left.y.max(0) as u16;
+        let x1 = (area.top_left.x + area.size.width as i32 - 1).min((WIDTH - 1) as i32) as u16;
+        let y1 = (area.top_left.y + area.size.height as i32 - 1).min((HEIGHT - 1) as i32) as u16;
+
+        let pixel_count = (x1 - x0 + 1) as usize * (y1 - y0 + 1) as usize;
+
+        self.set_address_window(x0, y0, x1, y1);
+
+        for color in colors.into_iter().take(pixel_count) {
+            let raw = RawU16::from(color).into_inner();
+            self.write_data_continue(&[(raw >> 8) as u8, (raw & 0xFF) as u8]);
+        }
+
+        self.cs.set_high();
+        Ok(())
+    }
+
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        if area.size.width == 0 || area.size.height == 0 {
+            return Ok(());
+        }
+
+        let x0 = area.top_left.x.max(0) as u16;
+        let y0 = area.top_left.y.max(0) as u16;
+        let x1 = (area.top_left.x + area.size.width as i32 - 1).min((WIDTH - 1) as i32) as u16;
+        let y1 = (area.top_left.y + area.size.height as i32 - 1).min((HEIGHT - 1) as i32) as u16;
+
+        let pixel_count = (x1 - x0 + 1) as usize * (y1 - y0 + 1) as usize;
+        let raw = RawU16::from(color).into_inner();
+        let bytes = [(raw >> 8) as u8, (raw & 0xFF) as u8];
+
+        self.set_address_window(x0, y0, x1, y1);
+        for _ in 0..pixel_count {
+            self.write_data_continue(&bytes);
+        }
+        self.cs.set_high();
+        Ok(())
     }
 }

@@ -16,16 +16,14 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
-
 use embassy_executor::task;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::Timer;
 
 use embedded_graphics::{
-    mono_font::{ascii::FONT_9X18_BOLD, MonoTextStyle},
-    pixelcolor::Rgb565,
+    mono_font::{ascii::FONT_6X10, MonoTextStyle},
+    pixelcolor::{BinaryColor, Rgb565},
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
     text::Text,
@@ -35,10 +33,10 @@ use embedded_graphics::{
 // Display constants
 // ---------------------------------------------------------------------------
 
-/// Horizontal resolution of the ST7789 display in pixels.
-pub const DISPLAY_WIDTH: usize = 240;
-/// Vertical resolution of the ST7789 display in pixels.
-pub const DISPLAY_HEIGHT: usize = 240;
+/// Horizontal resolution of the SSD1306 display in pixels (Wokwi).
+pub const DISPLAY_WIDTH: usize = 128;
+/// Vertical resolution of the SSD1306 display in pixels (Wokwi).
+pub const DISPLAY_HEIGHT: usize = 64;
 /// Bytes per pixel – RGB565 → 2 bytes.
 pub const BYTES_PER_PIXEL: usize = 2;
 /// Total framebuffer size in bytes.
@@ -73,114 +71,66 @@ pub const UI_CHANNEL_DEPTH: usize = 8;
 pub static UI_DRAW_CHANNEL: Channel<CriticalSectionRawMutex, UiDrawCommand, UI_CHANNEL_DEPTH> =
     Channel::new();
 
-// ---------------------------------------------------------------------------
-// In-memory framebuffer
-// ---------------------------------------------------------------------------
-
-/// An RGB565 framebuffer backed by a heap-allocated `Vec<u8>`.
-///
-/// The allocation is performed in PSRAM (because PSRAM is registered with the
-/// global allocator before this task starts) so the large buffer does not
-/// consume precious internal SRAM.
-pub struct Framebuffer {
-    pixels: Vec<u8>,
-    width: usize,
-    height: usize,
-}
-
-impl Framebuffer {
-    /// Allocate a new zeroed framebuffer (all pixels black) in PSRAM.
-    pub fn new_psram() -> Self {
-        let pixels = alloc::vec![0u8; FRAMEBUFFER_BYTES];
-        Self {
-            pixels,
-            width: DISPLAY_WIDTH,
-            height: DISPLAY_HEIGHT,
-        }
-    }
-
-    /// Return an immutable slice of the raw pixel bytes.
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.pixels
-    }
-
-    /// Write a single RGB565 pixel at `(x, y)`.
-    pub fn set_pixel(&mut self, x: usize, y: usize, color: Rgb565) {
-        if x < self.width && y < self.height {
-            let idx = (y * self.width + x) * BYTES_PER_PIXEL;
-            let raw: u16 = RawU16::from(color).into_inner();
-            self.pixels[idx] = (raw >> 8) as u8;
-            self.pixels[idx + 1] = (raw & 0xFF) as u8;
-        }
-    }
-}
-
-// Implement the embedded-graphics `DrawTarget` so we can use the full
-// embedded-graphics drawing API directly on the framebuffer.
-impl DrawTarget for Framebuffer {
-    type Color = Rgb565;
-    type Error = core::convert::Infallible;
-
-    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Pixel<Self::Color>>,
-    {
-        for Pixel(coord, color) in pixels {
-            if coord.x >= 0
-                && coord.y >= 0
-                && (coord.x as usize) < self.width
-                && (coord.y as usize) < self.height
-            {
-                self.set_pixel(coord.x as usize, coord.y as usize, color);
-            }
-        }
-        Ok(())
-    }
-}
-
-impl OriginDimensions for Framebuffer {
-    fn size(&self) -> Size {
-        Size::new(self.width as u32, self.height as u32)
-    }
-}
-
-use embedded_graphics::pixelcolor::raw::RawU16;
+// Note: Framebuffer implementation removed for Wokwi - we draw directly to display
 
 // ---------------------------------------------------------------------------
 // Compose helper
 // ---------------------------------------------------------------------------
 
-/// Apply a single [`UiDrawCommand`] to the framebuffer.
-fn compose(fb: &mut Framebuffer, cmd: &UiDrawCommand) {
+/// Apply a single [`UiDrawCommand`] to the display.
+fn compose<D>(display: &mut D, cmd: &UiDrawCommand)
+where
+    D: DrawTarget<Color = BinaryColor, Error = core::convert::Infallible>,
+{
     match cmd {
         UiDrawCommand::Clear(color) => {
-            // `DrawTarget::clear` returns `Infallible` – unwrap is always safe.
-            fb.clear(*color).unwrap();
+            let mono = if *color == Rgb565::BLACK {
+                BinaryColor::Off
+            } else {
+                BinaryColor::On
+            };
+            display.clear(mono).ok();
         }
 
         UiDrawCommand::StatusText(text) => {
-            let style = MonoTextStyle::new(&FONT_9X18_BOLD, Rgb565::WHITE);
-            Text::new(text.as_str(), Point::new(4, 18), style)
-                .draw(fb)
+            Rectangle::new(Point::new(0, 0), Size::new(DISPLAY_WIDTH as u32, 12))
+                .into_styled(PrimitiveStyle::with_fill(BinaryColor::Off))
+                .draw(display)
+                .ok();
+            let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+            Text::new(text.as_str(), Point::new(0, 10), style)
+                .draw(display)
                 .ok();
         }
 
         UiDrawCommand::ShowState(state) => {
-            let style = MonoTextStyle::new(&FONT_9X18_BOLD, Rgb565::YELLOW);
-            Text::new(state.as_str(), Point::new(4, 40), style)
-                .draw(fb)
+            // Clear a region for the state text
+            Rectangle::new(Point::new(0, 14), Size::new(DISPLAY_WIDTH as u32, 12))
+                .into_styled(PrimitiveStyle::with_fill(BinaryColor::Off))
+                .draw(display)
+                .ok();
+
+            let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+            Text::new(state.as_str(), Point::new(0, 24), style)
+                .draw(display)
                 .ok();
         }
 
         UiDrawCommand::ProgressBar { percent, label } => {
-            let bar_width = (DISPLAY_WIDTH as u32 * (*percent as u32)) / 100;
-            Rectangle::new(Point::new(4, 200), Size::new(bar_width, 16))
-                .into_styled(PrimitiveStyle::with_fill(Rgb565::GREEN))
-                .draw(fb)
+            // Clear progress bar area
+            Rectangle::new(Point::new(0, 34), Size::new(DISPLAY_WIDTH as u32, 30))
+                .into_styled(PrimitiveStyle::with_fill(BinaryColor::Off))
+                .draw(display)
                 .ok();
-            let style = MonoTextStyle::new(&FONT_9X18_BOLD, Rgb565::WHITE);
-            Text::new(label.as_str(), Point::new(4, 196), style)
-                .draw(fb)
+
+            let bar_width = ((DISPLAY_WIDTH as u32 - 2) * (*percent as u32)) / 100;
+            Rectangle::new(Point::new(1, 52), Size::new(bar_width, 10))
+                .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                .draw(display)
+                .ok();
+            let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+            Text::new(label.as_str(), Point::new(0, 44), style)
+                .draw(display)
                 .ok();
         }
     }
@@ -190,36 +140,60 @@ fn compose(fb: &mut Framebuffer, cmd: &UiDrawCommand) {
 // Task implementation
 // ---------------------------------------------------------------------------
 
-/// Embassy task that manages the PSRAM framebuffer and drives the ST7789.
+/// Embassy task that manages the display and processes draw commands.
 ///
 /// Spawn from `main`:
 /// ```rust,no_run
-/// spawner.spawn(ui_task()).unwrap();
+/// spawner.spawn(ui_task(i2c)).unwrap();
 /// ```
 #[task]
-pub async fn ui_task() {
-    log::info!("[ui] task started – {}×{} @ {} fps", DISPLAY_WIDTH, DISPLAY_HEIGHT, TARGET_FPS);
+pub async fn ui_task(i2c: esp_hal::i2c::master::I2c<'static, esp_hal::Blocking>) {
+    esp_println::println!("[ui] Task started – {}x{} @ {} fps", DISPLAY_WIDTH, DISPLAY_HEIGHT, TARGET_FPS);
 
-    // Allocate the framebuffer in PSRAM.
-    let mut fb = Framebuffer::new_psram();
+    // Initialize SSD1306 driver
+    esp_println::println!("[ui] Initializing SSD1306 driver...");
+    let mut display = crate::drivers::ssd1306::Ssd1306Driver::new(i2c);
+    esp_println::println!("[ui] Display driver initialized!");
 
-    // Paint the initial boot screen.
-    fb.clear(Rgb565::BLACK).ok();
-    let style = MonoTextStyle::new(&FONT_9X18_BOLD, Rgb565::CYAN);
-    Text::new("EspOS booting…", Point::new(4, 60), style)
-        .draw(&mut fb)
-        .ok();
+    // Paint the initial screen
+    esp_println::println!("[ui] Clearing display to black...");
+    let clear_result = display.clear(BinaryColor::Off);
+    let _ = display.flush();
+    esp_println::println!("[ui] Clear result: {:?}", clear_result);
+
+    esp_println::println!("[ui] Creating text style...");
+    let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+
+    esp_println::println!("[ui] Drawing initial text...");
+    let text = Text::new("EspOS SSD1306 OK", Point::new(0, 10), style);
+    let draw_result = text.draw(&mut display);
+    let _ = display.flush();
+    esp_println::println!("[ui] Draw result: {:?}", draw_result);
+    esp_println::println!("[ui] Initial screen drawn, entering main loop");
 
     loop {
-        // ---- Drain pending draw commands ---------------------------------
-        while let Ok(cmd) = UI_DRAW_CHANNEL.try_receive() {
-            compose(&mut fb, &cmd);
-        }
+        // Wait for a draw command with timeout
+        match embassy_time::with_timeout(
+            embassy_time::Duration::from_millis(FRAME_PERIOD_MS),
+            UI_DRAW_CHANNEL.receive()
+        ).await {
+            Ok(cmd) => {
+                log::info!("[ui] Received command: {:?}", cmd);
+                // Process this command
+                compose(&mut display, &cmd);
+                let _ = display.flush();
 
-        // ---- SPI DMA transfer to ST7789 ---------------------------------
-        // In a real build: `display.flush(fb.as_bytes()).await.unwrap();`
-        // The ST7789 driver in `crate::drivers::st7789` wraps the SPI
-        // peripheral and exposes a `flush()` async method.
+                // Drain any additional pending commands (batch processing)
+                while let Ok(cmd) = UI_DRAW_CHANNEL.try_receive() {
+                    log::debug!("[ui] Batch command: {:?}", cmd);
+                    compose(&mut display, &cmd);
+                }
+                let _ = display.flush();
+            }
+            Err(_timeout) => {
+                // No commands received, just tick at frame rate
+            }
+        }
 
         Timer::after_millis(FRAME_PERIOD_MS).await;
     }

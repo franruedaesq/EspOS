@@ -36,7 +36,7 @@ esp-backtrace = { version = "0.15", features = [
 ] }
 
 # Logging over UART
-esp-println = { version = "0.13", features = ["esp32s3", "log"] }
+esp-println = { version = "0.13", default-features = false, features = ["esp32s3", "log", "uart", "critical-section"] }
 
 # Heap allocator supporting both SRAM and PSRAM regions
 esp-alloc = "0.6"
@@ -80,3 +80,8 @@ debug = true
 # esp-wifi requires opt-level 2+, override if any profile uses less
 [profile.dev.package.esp-wifi]
 opt-level = 2
+
+# Local patch: fixes `low_power_wait = false` compile error in 0.6.0 where
+# SIGNAL_WORK_THREAD_MODE uses AtomicBool without the cfg guard.
+[patch.crates-io]
+esp-hal-embassy = { path = "patches/esp-hal-embassy" }
