@@ -17,3 +17,7 @@ build-std = ["core", "alloc"]
 # would hang forever. On real hardware this can be re-enabled for lower
 # power consumption.
 ESP_HAL_EMBASSY_CONFIG_LOW_POWER_WAIT = "false"
+
+# WiFi credentials - set these to your network
+WIFI_SSID = "YourNetworkName"
+WIFI_PASSWORD = "YourPassword"

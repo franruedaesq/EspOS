@@ -776,6 +776,7 @@ dependencies = [
  "embassy-sync 0.6.2",
  "embassy-time",
  "embedded-graphics",
+ "embedded-io-async",
  "esp-alloc",
  "esp-backtrace",
  "esp-hal",

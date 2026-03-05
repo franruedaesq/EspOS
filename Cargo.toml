@@ -47,6 +47,9 @@ esp-wifi = { version = "0.12", features = ["esp32s3", "wifi"] }
 # 2-D graphics primitives for the virtual framebuffer
 embedded-graphics = "0.8"
 
+# Embedded I/O traits for async read/write
+embedded-io-async = "0.6"
+
 # Stack-allocated collections (no heap required)
 heapless = "0.8"
 

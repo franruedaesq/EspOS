@@ -8,3 +8,4 @@ pub mod can_bus;
 pub mod ui;
 pub mod telemetry;
 pub mod cli;
+pub mod web_server;

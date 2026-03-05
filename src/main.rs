@@ -145,39 +145,68 @@ async fn main(spawner: Spawner) {
     // let in4 = Output::new(peripherals.GPIO7,  Level::Low);
 
     // -- SSD1306 I2C display (Wokwi Configuration) ----------------------------
-    esp_println::println!("=== Setting up I2C for SSD1306 ===");
-    use esp_hal::i2c::master::{Config as I2cConfig, I2c};
-    use esp_hal::time::RateExtU32;
+    // DISABLED - Running without display/joystick
+    // esp_println::println!("=== Setting up I2C for SSD1306 ===");
+    // use esp_hal::i2c::master::{Config as I2cConfig, I2c};
+    // use esp_hal::time::RateExtU32;
 
-    let mut i2c_cfg = I2cConfig::default();
-    i2c_cfg.frequency = 400.kHz();
+    // let mut i2c_cfg = I2cConfig::default();
+    // i2c_cfg.frequency = 400.kHz();
 
-    let i2c = I2c::new(peripherals.I2C0, i2c_cfg)
-        .unwrap()
-        .with_sda(peripherals.GPIO8)
-        .with_scl(peripherals.GPIO9);
-    esp_println::println!("=== I2C and pins configured ===");
+    // let i2c = I2c::new(peripherals.I2C0, i2c_cfg)
+    //     .unwrap()
+    //     .with_sda(peripherals.GPIO8)
+    //     .with_scl(peripherals.GPIO9);
+    // esp_println::println!("=== I2C and pins configured ===");
 
     // -------------------------------------------------------------------------
-    // 7. Spawn remaining tasks
+    // 7. WiFi + Network Stack Setup
     // -------------------------------------------------------------------------
+    esp_println::println!("=== Initializing WiFi ===");
 
-    // WiFi + embassy-net tasks.
-    // Requires esp-wifi controller and network stack to be initialised first.
-    // The full WiFi init sequence is shown below; it is gated on a feature flag
-    // so the firmware boots without credentials during development.
-    //
-    // let (wifi_interface, wifi_controller) = esp_wifi::wifi::new_with_mode(
-    //     &wifi_init, peripherals.WIFI, WifiStaDevice).unwrap();
-    // let net_config = embassy_net::Config::dhcpv4(Default::default());
-    // static NET_RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
-    // let (stack, runner) = embassy_net::new(
-    //     wifi_interface, net_config,
-    //     NET_RESOURCES.init(StackResources::new()),
-    //     embassy_time::Instant::now().as_ticks(),
-    // );
-    // spawner.spawn(tasks::wifi::net_task(runner)).expect("spawn net_task");
-    // spawner.spawn(tasks::wifi::wifi_task(wifi_controller, stack)).expect("spawn wifi_task");
+    use esp_wifi::wifi::WifiStaDevice;
+    use embassy_net::{Config as NetConfig, StackResources};
+
+    let timg0 = TimerGroup::new(peripherals.TIMG0);
+    let wifi_init = esp_wifi::init(
+        timg0.timer0,
+        esp_hal::rng::Rng::new(peripherals.RNG),
+        peripherals.RADIO_CLK,
+    ).unwrap();
+
+    use static_cell::StaticCell;
+    static WIFI_INIT: StaticCell<esp_wifi::EspWifiController<'static>> = StaticCell::new();
+    let wifi_init = WIFI_INIT.init(wifi_init);
+
+    let (wifi_interface, wifi_controller) = esp_wifi::wifi::new_with_mode(
+        wifi_init,
+        peripherals.WIFI,
+        WifiStaDevice,
+    ).unwrap();
+
+    let net_config = NetConfig::dhcpv4(Default::default());
+
+    static STACK_RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
+    static STACK: StaticCell<embassy_net::Stack<'static>> = StaticCell::new();
+
+    let (stack, runner) = embassy_net::new(
+        wifi_interface,
+        net_config,
+        STACK_RESOURCES.init(StackResources::new()),
+        embassy_time::Instant::now().as_ticks(),
+    );
+
+    let stack = &*STACK.init(stack);
+
+    esp_println::println!("=== WiFi initialized, spawning tasks ===");
+    spawner.spawn(tasks::wifi::net_task(runner)).expect("spawn net_task");
+    spawner.spawn(tasks::wifi::wifi_task(wifi_controller, *stack)).expect("spawn wifi_task");
+    spawner.spawn(tasks::web_server::web_server_task(stack)).expect("spawn web_server_task");
+    esp_println::println!("=== WiFi and web server tasks spawned ===");
+
+    // -------------------------------------------------------------------------
+    // 8. Spawn remaining tasks
+    // -------------------------------------------------------------------------
 
     // Telemetry: sample RAM, CPU load, and battery voltage every 1 second.
     spawner
@@ -192,7 +221,7 @@ async fn main(spawner: Spawner) {
         .expect("spawn cli_task");
 
     // -------------------------------------------------------------------------
-    // 8. Spawn tasks – Core 1
+    // 9. Spawn tasks – Core 1
     // -------------------------------------------------------------------------
 
     // IMU sensor fusion at 100 Hz.
@@ -206,7 +235,7 @@ async fn main(spawner: Spawner) {
         .expect("spawn motor_task");
 
     // -------------------------------------------------------------------------
-    // 9. Spawn tasks – any core
+    // 10. Spawn tasks – any core
     // -------------------------------------------------------------------------
 
     // CAN bus / TWAI message router.
@@ -214,20 +243,20 @@ async fn main(spawner: Spawner) {
         .spawn(tasks::can_bus::can_bus_task())
         .expect("spawn can_bus_task");
 
-    // UI task - pass I2C bus to SSD1306 driver
-    esp_println::println!("=== Spawning UI task ===");
-    spawner
-        .spawn(tasks::ui::ui_task(
-            i2c,
-            peripherals.ADC1,
-            peripherals.GPIO1,
-            peripherals.GPIO2,
-        ))
-        .expect("spawn ui_task");
-    esp_println::println!("=== UI task spawned ===");
+    // UI task - DISABLED - Running without display/joystick
+    // esp_println::println!("=== Spawning UI task ===");
+    // spawner
+    //     .spawn(tasks::ui::ui_task(
+    //         i2c,
+    //         peripherals.ADC1,
+    //         peripherals.GPIO1,
+    //         peripherals.GPIO2,
+    //     ))
+    //     .expect("spawn ui_task");
+    // esp_println::println!("=== UI task spawned ===");
 
     // -------------------------------------------------------------------------
-    // 10. Agentic state machine (runs on this task, Core 0)
+    // 11. Agentic state machine (runs on this task, Core 0)
     // -------------------------------------------------------------------------
     esp_println::println!("=== All tasks spawned, entering state machine ===");
     state_machine::run(&spawner).await;
