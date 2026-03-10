@@ -1,5 +1,5 @@
 [target.xtensa-esp32s3-none-elf]
-runner = "espflash flash --monitor"
+runner = "espflash flash --monitor -p /dev/cu.usbmodem5B5F1229581"
 rustflags = [
     "-C", "link-arg=-nostartfiles",
     "-C", "link-arg=-Tlinkall.x",
@@ -18,6 +18,9 @@ build-std = ["core", "alloc"]
 # power consumption.
 ESP_HAL_EMBASSY_CONFIG_LOW_POWER_WAIT = "false"
 
+# Enable INFO level logging to see WiFi connection status and IP address
+RUST_LOG = "info"
+
 # WiFi credentials - set these to your network
-WIFI_SSID = "YourNetworkName"
-WIFI_PASSWORD = "YourPassword"
+WIFI_SSID = "WLAN14192654"
+WIFI_PASSWORD = "xssaMcTc5kjf"

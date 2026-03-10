@@ -81,7 +81,7 @@ async fn main(spawner: Spawner) {
     // 3. Logging (over UART0 via esp-println)
     // -------------------------------------------------------------------------
     esp_println::println!("=== Initializing logger ===");
-    esp_println::logger::init_logger_from_env();
+    esp_println::logger::init_logger(log::LevelFilter::Info);
     esp_println::println!("=== Logger initialized, testing info macro ===");
     info!("EspOS v{} booting on ESP32-S3...", env!("CARGO_PKG_VERSION"));
     esp_println::println!("=== Info macro works ===");

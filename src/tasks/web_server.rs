@@ -12,7 +12,7 @@
 use embassy_executor::task;
 use embassy_net::{Stack, tcp::TcpSocket};
 use embassy_time::{Duration, Instant};
-use embedded_io_async::Write;
+use embedded_io_async::{Read, Write};
 
 use crate::memory;
 use crate::tasks::telemetry::LAST_CPU_PERCENT;
@@ -180,11 +180,13 @@ const HTML_DASHBOARD: &str = r#"<!DOCTYPE html>
             try {
                 const response = await fetch('/api/stats');
                 const data = await response.json();
+                console.log('Received data:', data);
 
                 document.getElementById('wifi-status').textContent = data.wifi_connected ? '● ONLINE' : '○ OFFLINE';
                 document.getElementById('wifi-status').className = data.wifi_connected ? 'card-value status-online' : 'card-value status-offline';
                 document.getElementById('wifi-ip').textContent = data.wifi_ip || 'No IP';
                 document.getElementById('uptime').textContent = data.uptime_secs;
+                console.log('Updated uptime:', data.uptime_secs);
 
                 const ramUsedKB = Math.round(data.ram_used / 1024);
                 const ramFreeKB = Math.round(data.ram_free / 1024);
@@ -192,6 +194,7 @@ const HTML_DASHBOARD: &str = r#"<!DOCTYPE html>
                 document.getElementById('ram-used').textContent = ramUsedKB;
                 document.getElementById('ram-free').textContent = ramFreeKB;
                 document.getElementById('ram-progress').style.width = ramPercent + '%';
+                console.log('Updated RAM:', ramUsedKB, 'KB used,', ramFreeKB, 'KB free');
 
                 document.getElementById('cpu-load').textContent = data.cpu_percent;
                 document.getElementById('cpu-progress').style.width = data.cpu_percent + '%';
@@ -199,6 +202,7 @@ const HTML_DASHBOARD: &str = r#"<!DOCTYPE html>
                 const heartbeatOk = data.heartbeat_hz > 0;
                 document.getElementById('heartbeat').textContent = heartbeatOk ? '●' : '○';
                 document.getElementById('heartbeat-status').textContent = heartbeatOk ? 'Active' : 'Stalled';
+                console.log('Update complete');
 
             } catch (error) {
                 console.error('Failed to fetch stats:', error);
@@ -237,14 +241,22 @@ pub async fn web_server_task(stack: &'static Stack<'static>) {
         match socket.read(&mut buf).await {
             Ok(n) if n > 0 => {
                 let request = core::str::from_utf8(&buf[..n]).unwrap_or("");
+                log::info!("[web_server] request: {} bytes", n);
 
                 if request.starts_with("GET /api/stats") {
+                    log::info!("[web_server] serving /api/stats");
                     handle_api_stats(&mut socket).await;
                 } else {
+                    log::info!("[web_server] serving dashboard");
                     handle_dashboard(&mut socket).await;
                 }
             }
-            _ => {}
+            Err(e) => {
+                log::warn!("[web_server] read error: {:?}", e);
+            }
+            _ => {
+                log::warn!("[web_server] read returned 0 bytes");
+            }
         }
 
         socket.close();
@@ -252,9 +264,19 @@ pub async fn web_server_task(stack: &'static Stack<'static>) {
 }
 
 async fn handle_dashboard(socket: &mut TcpSocket<'_>) {
-    let _ = socket.write_all(HTTP_HEADER.as_bytes()).await;
+    // Build response with Content-Length header
+    let mut response: heapless::String<256> = heapless::String::new();
+    let _ = core::fmt::write(
+        &mut response,
+        format_args!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            HTML_DASHBOARD.len()
+        ),
+    );
+
+    let _ = socket.write_all(response.as_bytes()).await;
     let _ = socket.write_all(HTML_DASHBOARD.as_bytes()).await;
-    socket.flush().await.ok();
+    let _ = socket.flush().await;
 }
 
 async fn handle_api_stats(socket: &mut TcpSocket<'_>) {
@@ -276,7 +298,19 @@ async fn handle_api_stats(socket: &mut TcpSocket<'_>) {
         ),
     );
 
-    let _ = socket.write_all(HTTP_JSON_HEADER.as_bytes()).await;
+    log::info!("[web_server] JSON response: {}", json.as_str());
+
+    // Build response with Content-Length header
+    let mut response: heapless::String<256> = heapless::String::new();
+    let _ = core::fmt::write(
+        &mut response,
+        format_args!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            json.len()
+        ),
+    );
+
+    let _ = socket.write_all(response.as_bytes()).await;
     let _ = socket.write_all(json.as_bytes()).await;
-    socket.flush().await.ok();
+    let _ = socket.flush().await;
 }
